@@ -250,7 +250,29 @@ class DeadReckoning(Estimator):
         if len(self.x_hat) > 0 and self.x_hat[-1][0] < self.x[-1][0]:
             # TODO: Your implementation goes here!
             # You may ONLY use self.u and self.x[0] for estimation
-            raise NotImplementedError
+            # Previous state
+            x_prev = self.x_hat[-1]
+            u = self.u[-1]
+            
+            # Get time step
+            dt = self.dt
+            r = self.r
+            d = self.d
+
+            # Control inputs
+            uL = u[1]
+            uR = u[2]
+
+            # State update using unicycle kinematics
+            phi = x_prev[1] + (r / (2 * d)) * (uR - uL) * dt
+            x = x_prev[2] + (r / 2) * (uL + uR) * np.cos(phi) * dt
+            y = x_prev[3] + (r / 2) * (uL + uR) * np.sin(phi) * dt
+            theta_L = x_prev[4] + uL * dt
+            theta_R = x_prev[5] + uR * dt
+
+            # Store the new state estimate
+            new_state = np.array([self.x[-1][0], phi, x, y, theta_L, theta_R])
+            self.x_hat.append(new_state)
 
 
 class KalmanFilter(Estimator):
@@ -281,6 +303,35 @@ class KalmanFilter(Estimator):
         self.phid = np.pi / 4
         # TODO: Your implementation goes here!
         # You may define the A, C, Q, R, and P matrices below.
+        dt = self.dt
+        r = self.r
+        d = self.d
+
+        # State transition matrix A (linearized system)
+        self.A = np.eye(6)
+        self.A[1, 1] = 1
+        self.A[2, 1] = -dt * r * (self.u[0][1] + self.u[0][2]) / 2 * np.sin(self.phid)
+        self.A[3, 1] = dt * r * (self.u[0][1] + self.u[0][2]) / 2 * np.cos(self.phid)
+
+        # Input matrix B
+        self.B = dt * np.array([
+            [0, 0],
+            [r / (2 * d), -r / (2 * d)],
+            [r / 2 * np.cos(self.phid), r / 2 * np.cos(self.phid)],
+            [r / 2 * np.sin(self.phid), r / 2 * np.sin(self.phid)],
+            [1, 0],
+            [0, 1]
+        ])
+
+        # Measurement matrix C
+        self.C = np.array([
+            [0, 1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0]
+        ])
+
+        self.Q = np.eye(6) * 0.01
+        self.R = np.eye(2) * 0.05
+        self.P = np.eye(6) * 0.1
 
     # noinspection DuplicatedCode
     # noinspection PyPep8Naming
@@ -288,7 +339,25 @@ class KalmanFilter(Estimator):
         if len(self.x_hat) > 0 and self.x_hat[-1][0] < self.x[-1][0]:
             # TODO: Your implementation goes here!
             # You may use self.u, self.y, and self.x[0] for estimation
-            raise NotImplementedError
+            x_prev = self.x_hat[-1]
+            u = self.u[-1]
+            y = self.y[-1]
+
+            # Prediction Step
+            x_predict = self.A @ x_prev + self.B @ np.array([[u[1]], [u[2]]]).flatten()
+            P_predict = self.A @ self.P @ self.A.T + self.Q
+
+            # Kalman Gain
+            K = P_predict @ self.C.T @ np.linalg.inv(self.C @ P_predict @ self.C.T + self.R)
+
+            # Correction Step
+            y_predict = self.C @ x_predict
+            x_new = x_predict + K @ (y[1:] - y_predict)
+            P_new = (np.eye(6) - K @ self.C) @ P_predict
+
+            # Store new state and covariance
+            self.x_hat.append(x_new)
+            self.P = P_new
 
 
 # noinspection PyPep8Naming

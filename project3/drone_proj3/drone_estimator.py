@@ -210,7 +210,32 @@ class DeadReckoning(Estimator):
         if len(self.x_hat) > 0:
             # TODO: Your implementation goes here!
             # You may ONLY use self.u and self.x[0] for estimation
-            raise NotImplementedError
+            x_prev = self.x_hat[-1]
+            u = self.u[_]
+
+            m = self.m
+            J = self.J
+            g = self.gr
+            dt = self.dt
+
+            x, z, phi, x_dot, z_dot, phi_dot = x_prev
+            u1, u2 = u
+
+            x_ddot = (-u1 * np.sin(phi)) / m
+            z_ddot = (-g + (u1 * np.cos(phi)) / m)
+            phi_ddot = u2 / J
+
+            x_new = x + x_dot * dt
+            z_new = z + z_dot * dt
+            phi_new = phi + phi_dot * dt
+
+            x_dot_new = x_dot + x_ddot * dt
+            z_dot_new = z_dot + z_ddot * dt
+            phi_dot_new = phi_dot + phi_ddot * dt
+
+            self.x_hat.append([
+                x_new, z_new, phi_new, x_dot_new, z_dot_new, phi_dot_new
+            ])
 
 # noinspection PyPep8Naming
 class ExtendedKalmanFilter(Estimator):
