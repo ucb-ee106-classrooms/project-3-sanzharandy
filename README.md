@@ -1,1 +1,1 @@
-# project-3-sanzharandy
+# Project 3 - State Estimation: Sanzhar and Andy
