@@ -270,7 +270,6 @@ class DeadReckoning(Estimator):
             theta_L = x_prev[4] + uL * dt
             theta_R = x_prev[5] + uR * dt
 
-            # Store the new state estimate
             new_state = np.array([self.x[-1][0], phi, x, y, theta_L, theta_R])
             self.x_hat.append(new_state)
 
@@ -307,31 +306,31 @@ class KalmanFilter(Estimator):
         r = self.r
         d = self.d
 
-        # State transition matrix A (linearized system)
+        # We keep A as identity since we do the actual unicycle kinematics manually
         self.A = np.eye(6)
-        self.A[1, 1] = 1
-        self.A[2, 1] = -dt * r * (self.u[0][1] + self.u[0][2]) / 2 * np.sin(self.phid)
-        self.A[3, 1] = dt * r * (self.u[0][1] + self.u[0][2]) / 2 * np.cos(self.phid)
 
-        # Input matrix B
+        # We won't rely heavily on B because we'll do manual kinematics in update()
         self.B = dt * np.array([
             [0, 0],
-            [r / (2 * d), -r / (2 * d)],
+            [0, 0],
             [r / 2 * np.cos(self.phid), r / 2 * np.cos(self.phid)],
             [r / 2 * np.sin(self.phid), r / 2 * np.sin(self.phid)],
             [1, 0],
             [0, 1]
         ])
 
-        # Measurement matrix C
+        # Measurement matrix C picks out x, y from the state
+        #  index 2 -> x
+        #  index 3 -> y
         self.C = np.array([
-            [0, 1, 0, 0, 0, 0],
-            [0, 0, 1, 0, 0, 0]
+            [0, 0, 1, 0, 0, 0],  
+            [0, 0, 0, 1, 0, 0]
         ])
 
-        self.Q = np.eye(6) * 0.01
-        self.R = np.eye(2) * 0.05
-        self.P = np.eye(6) * 0.1
+        # Covariances
+        self.Q = np.diag([0.01, 0.01, 0.1, 0.1, 0.01, 0.01])
+        self.R = np.eye(2) * 0.1
+        self.P = np.eye(6) * 0.01
 
     # noinspection DuplicatedCode
     # noinspection PyPep8Naming
@@ -339,26 +338,64 @@ class KalmanFilter(Estimator):
         if len(self.x_hat) > 0 and self.x_hat[-1][0] < self.x[-1][0]:
             # TODO: Your implementation goes here!
             # You may use self.u, self.y, and self.x[0] for estimation
-            x_prev = self.x_hat[-1]
-            u = self.u[-1]
-            y = self.y[-1]
+            x_prev = np.array(self.x_hat[-1], dtype=float)
+            u_curr = self.u[-1]
+            y_curr = self.y[-1]
 
-            # Prediction Step
-            x_predict = self.A @ x_prev + self.B @ np.array([[u[1]], [u[2]]]).flatten()
+            dt = self.dt
+            r = self.r
+            d = self.d
+
+            # Extract from x_prev for readability
+            time_prev, phi_prev, x_prevpos, y_prevpos, thl_prev, thr_prev = x_prev
+
+            # Compute linear & angular velocities from wheel speeds
+            uL = u_curr[1]
+            uR = u_curr[2]
+            v = r * (uL + uR) / 2.0            # linear velocity
+            w = r * (uR - uL) / (2.0 * d)      # angular velocity
+
+            # Prediction via unicycle kinematics
+            time_new = time_prev + dt
+            phi_new  = phi_prev + w * dt
+            x_newpos = x_prevpos + v * np.cos(phi_prev) * dt
+            y_newpos = y_prevpos + v * np.sin(phi_prev) * dt
+            thl_new  = thl_prev + uL * dt
+            thr_new  = thr_prev + uR * dt
+
+            x_predict = np.array([
+                time_new,
+                phi_new,
+                x_newpos,
+                y_newpos,
+                thl_new,
+                thr_new
+            ], dtype=float)
+
+            # Covariance prediction
             P_predict = self.A @ self.P @ self.A.T + self.Q
 
-            # Kalman Gain
-            K = P_predict @ self.C.T @ np.linalg.inv(self.C @ P_predict @ self.C.T + self.R)
+            # Compute predicted measurement: [x_predict[2], x_predict[3]]
+            y_predict = self.C @ x_predict  # => [ x_newpos, y_newpos ]
 
-            # Correction Step
-            y_predict = self.C @ x_predict
-            x_new = x_predict + K @ (y[1:] - y_predict)
+            # Kalman Gain (with small regularization)
+            S = self.C @ P_predict @ self.C.T + self.R + np.eye(2) * 1e-6
+            K = P_predict @ self.C.T @ np.linalg.inv(S)
+
+            # Innovation (measurement - prediction)
+            # y_curr: [t, x_meas, y_meas], so y_curr[1] = x_meas, y_curr[2] = y_meas
+            innovation = np.array([y_curr[1], y_curr[2]]) - y_predict
+
+            # State correction
+            x_new = x_predict + K @ innovation
+            x_new[0] = time_new  # lock in the predicted time
+
+            # Covariance update
             P_new = (np.eye(6) - K @ self.C) @ P_predict
 
-            # Store new state and covariance
+            # Store the updated estimate
             self.x_hat.append(x_new)
             self.P = P_new
-
 
 # noinspection PyPep8Naming
 class ExtendedKalmanFilter(Estimator):
@@ -395,10 +432,156 @@ class ExtendedKalmanFilter(Estimator):
         # TODO: Your implementation goes here!
         # You may define the Q, R, and P matrices below.
 
+        self.Q = np.diag([
+            0,    # time (if you store it)
+            0.20,    # phi
+            0.25,    # x
+            0.09,    # y
+            0,   # theta_L
+            0    # theta_R
+        ])
+
+        # (B) Measurement noise R (moderate)
+        self.R = np.diag([
+            0.05,    # distance
+            0.01     # bearing
+        ])
+
+        # (C) Initial covariance P (moderate)
+        self.P = np.diag([
+            0,  # time
+            0.2,   # phi
+            0.2,   # x
+            0.1,   # y
+            0,  # theta_L
+            0   # theta_R
+        ])
+
     # noinspection DuplicatedCode
     def update(self, _):
         if len(self.x_hat) > 0 and self.x_hat[-1][0] < self.x[-1][0]:
             # TODO: Your implementation goes here!
             # You may use self.u, self.y, and self.x[0] for estimation
-            raise NotImplementedError
+            x_prev = np.array(self.x_hat[-1], dtype=float)
+            u_curr = self.u[-1]
+            y_curr = self.y[-1]
 
+            dt = self.dt
+            r  = self.r
+            d  = self.d
+            lx, ly = self.landmark
+
+            # Extract old states and control input
+            t_old, phi_old, x_old, y_old, thL_old, thR_old = x_prev
+            uL = u_curr[1]
+            uR = u_curr[2]
+
+            # Compute linear and angular velocities
+            v = r * (uL + uR) / 2.0
+            w = r * (uR - uL) / (2.0 * d)
+
+            # Predict new states using unicycle kinematics
+            t_new    = t_old + dt
+            phi_new  = phi_old + w * dt
+            x_new    = x_old + v * np.cos(phi_old) * dt
+            y_new    = y_old + v * np.sin(phi_old) * dt
+            thL_new  = thL_old + uL * dt
+            thR_new  = thR_old + uR * dt
+
+            x_predict = np.array([
+                t_new,
+                phi_new,
+                x_new,
+                y_new,
+                thL_new,
+                thR_new
+            ], dtype=float)
+
+            # Linearize f about (x_prev, u_curr) -> A = df/dx
+            A = self.jacobian_f(x_prev, u_curr)
+
+            # Predict Covariance
+            P_predict = A @ self.P @ A.T + self.Q
+
+            # Measurement Prediction: y_pred = h(x_predict)
+            y_pred = self.h(x_predict)
+
+            # Linearize h about x_predict -> C = dh/dx
+            C = self.jacobian_h(x_predict)
+
+            # Kalman Gain
+            S = C @ P_predict @ C.T + self.R + np.eye(2) * 1e-3
+            K = P_predict @ C.T @ np.linalg.inv(S)
+
+            # y_curr = [t, dist_meas, bearing_meas]
+            innovation = np.array([y_curr[1], y_curr[2]]) - y_pred
+            innovation[1] = (innovation[1] + np.pi) % (2 * np.pi) - np.pi
+
+            # Update State & Covariance
+            x_new_est = x_predict + K @ innovation
+            x_new_est[0] = t_new
+            x_new_est[1] = (x_new_est[1] + np.pi) % (2 * np.pi) - np.pi
+
+            P_new = (np.eye(6) - K @ C) @ P_predict
+
+            self.x_hat.append(x_new_est)
+            self.P = P_new
+    
+    def jacobian_f(self, x_state, u):
+        dt = self.dt
+        r = self.r
+        d = self.d
+
+        _, phi_old, x_old, y_old, _, _ = x_state
+        uL = u[1]
+        uR = u[2]
+
+        v = r * (uL + uR) / 2.0
+        w = r * (uR - uL) / (2.0 * d)
+
+        A = np.eye(6)
+        A[2, 1] = -v * dt * np.sin(phi_old)
+        A[3, 1] = v * dt * np.cos(phi_old)
+
+        return A
+
+    def h(self, x_state):
+        _, phi, x, y, _, _ = x_state
+        lx, ly = self.landmark
+
+        dx = lx - x
+        dy = ly - y
+
+        dist = np.sqrt(dx**2 + dy**2)
+        bearing = np.arctan2(dy, dx) - phi
+        bearing = (bearing + np.pi) % (2 * np.pi) - np.pi  # Wrap to [-pi, pi]
+
+        return np.array([dist, bearing], dtype=float)
+
+    def jacobian_h(self, x_state):
+        """
+        Jacobian of h w.r.t x for [distance, bearing].
+        x_state = [t, phi, x, y, thL, thR].
+        Returns C (2x6).
+        """
+        _, phi, x, y, _, _ = x_state
+        lx, ly = self.landmark
+
+        dx = lx - x
+        dy = ly - y
+        dist = np.sqrt(dx**2 + dy**2)
+
+        C = np.zeros((2, 6))
+
+        # distance partials
+        if dist > 1e-9:  # avoid division by zero
+            C[0, 2] = -(dx) / dist   # partial dist / partial x
+            C[0, 3] = -(dy) / dist   # partial dist / partial y
+
+        denom = dx**2 + dy**2
+        if denom > 1e-9:
+            C[1, 1] = -1.0  # partial wrt phi
+            C[1, 2] = dy / denom
+            C[1, 3] = -dx / denom
+
+        return C
