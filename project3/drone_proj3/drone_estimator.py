@@ -200,7 +200,7 @@ class DeadReckoning(Estimator):
     Example
     ----------
     To run dead reckoning:
-        $ python drone_estimator_node.py --estimator dead_reckoning
+        $ python3 drone_estimator_node.py --estimator dr
     """
     def __init__(self, is_noisy=False):
         super().__init__(is_noisy)
@@ -254,7 +254,7 @@ class ExtendedKalmanFilter(Estimator):
     Example
     ----------
     To run the extended Kalman filter:
-        $ python drone_estimator_node.py --estimator extended_kalman_filter
+        $ python3 drone_estimator_node.py --estimator ekf
     """
     def __init__(self, is_noisy=False):
         super().__init__(is_noisy)
