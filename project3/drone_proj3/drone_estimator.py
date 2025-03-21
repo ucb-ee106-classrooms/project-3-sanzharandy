@@ -211,31 +211,24 @@ class DeadReckoning(Estimator):
             # TODO: Your implementation goes here!
             # You may ONLY use self.u and self.x[0] for estimation
             x_prev = self.x_hat[-1]
-            u = self.u[_]
+            u1, u2 = self.u[-1]
+            x, z, phi, vx, vz, omega = x_prev
 
-            m = self.m
-            J = self.J
-            g = self.gr
-            dt = self.dt
+            x_dot = vx
+            z_dot = vz
+            phi_dot = omega
+            vx_dot = (-u1 / self.m) * np.sin(phi)
+            vz_dot = (-self.gr + (u1 / self.m) * np.cos(phi))
+            omega_dot = u2 / self.J
 
-            x, z, phi, x_dot, z_dot, phi_dot = x_prev
-            u1, u2 = u
-
-            x_ddot = (-u1 * np.sin(phi)) / m
-            z_ddot = (-g + (u1 * np.cos(phi)) / m)
-            phi_ddot = u2 / J
-
-            x_new = x + x_dot * dt
-            z_new = z + z_dot * dt
-            phi_new = phi + phi_dot * dt
-
-            x_dot_new = x_dot + x_ddot * dt
-            z_dot_new = z_dot + z_ddot * dt
-            phi_dot_new = phi_dot + phi_ddot * dt
-
-            self.x_hat.append([
-                x_new, z_new, phi_new, x_dot_new, z_dot_new, phi_dot_new
-            ])
+            x_new = x + x_dot * self.dt
+            z_new = z + z_dot * self.dt
+            phi_new = phi + phi_dot * self.dt
+            vx_new = vx + vx_dot * self.dt
+            vz_new = vz + vz_dot * self.dt
+            omega_new = omega + omega_dot * self.dt
+            
+            self.x_hat.append(np.array([x_new, z_new, phi_new, vx_new, vz_new, omega_new]))
 
 # noinspection PyPep8Naming
 class ExtendedKalmanFilter(Estimator):
@@ -271,25 +264,94 @@ class ExtendedKalmanFilter(Estimator):
         self.A = None
         self.B = None
         self.C = None
-        self.Q = None
-        self.R = None
-        self.P = None
+        self.Q = np.diag([0.1, 0.01, 0.1, 0.1, 0.01, 0.1])
+        self.R = np.diag([1, 1])
+        self.P = np.diag([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
 
     # noinspection DuplicatedCode
     def update(self, i):
         if len(self.x_hat) > 0: #and self.x_hat[-1][0] < self.x[-1][0]:
             # TODO: Your implementation goes here!
             # You may use self.u, self.y, and self.x[0] for estimation
-            raise NotImplementedError
+            x_prev = self.x_hat[-1]
+            u_prev = self.u[i-1]
 
+            x_predict = self.g(x_prev, u_prev)
+            A = self.approx_A(x_prev, u_prev)  
+            P_predict = A @ self.P @ A.T + self.Q
+
+            C = self.approx_C(x_predict)  
+            y_predict = self.h(x_predict)
+            residual = self.y[i] - y_predict      
+            S = C @ P_predict @ C.T + self.R   
+            K = P_predict @ C.T @ np.linalg.inv(S)
+            x_update = x_predict + K @ residual
+            P_update = (np.eye(len(x_prev)) - K @ C) @ P_predict
+
+            self.x_hat.append(x_update)
+            self.P = P_update
+
+    # This is Correct
     def g(self, x, u):
-        raise NotImplementedError
+        x_pos, z_pos, phi, x_dot, z_dot, phi_dot = x
+        u1, u2 = u
+        x_ddot = (-u1 * np.sin(phi)) / self.m
+        z_ddot = (-self.gr + (u1 * np.cos(phi)) / self.m)
+        phi_ddot = u2 / self.J
 
-    def h(self, x, y_obs):
-        raise NotImplementedError
+        x_pos_new = x_pos + x_dot * self.dt
+        z_pos_new = z_pos + z_dot * self.dt
+        phi_new   = phi   + phi_dot * self.dt
+        x_dot_new = x_dot + x_ddot * self.dt
+        z_dot_new = z_dot + z_ddot * self.dt
+        phi_dot_new = phi_dot + phi_ddot * self.dt
 
+        return np.array([x_pos_new, z_pos_new, phi_new, x_dot_new, z_dot_new, phi_dot_new])
+    # This is Correct
+    def h(self, x, y_obs=None):
+        lx, ly, lz = self.landmark
+        x_pos = x[0]
+        z_pos = x[1]
+        phi = x[2]
+
+        distance = np.sqrt((x_pos - lx)**2 + (0 - ly)**2 + (z_pos - lz)**2)
+
+        return np.array([distance, phi])
+
+    # This is Correct
     def approx_A(self, x, u):
-        raise NotImplementedError
+        
+        u1 = u[0]
+        m = self.m
+        dt = self.dt
+        phi = x[2]
+
+        A = np.eye(6)
+        A[0,3] = dt
+        A[1,4] = dt
+        A[2,5] = dt
+
+        A[3,2] = -dt*u1*np.cos(phi)/m
+        A[4,2] = -dt*u1*np.sin(phi)/m
+
+        return A
     
+    # This is Correct
     def approx_C(self, x):
-        raise NotImplementedError
+        lx, ly, lz = self.landmark
+        x_pos = x[0]
+        z_pos = x[1]
+        phi = x[2]
+        d = np.sqrt((lx - x_pos)**2 + (ly)**2 + (lz - z_pos)**2)
+        if d == 0:
+            d = 1e-6        
+
+        dd_dx = (x_pos - lx) / d
+        dd_dz = (z_pos - lz) / d
+
+        C = np.zeros((2, 6))
+        C[0, 0] = dd_dx
+        C[0, 1] = dd_dz
+        C[1, 2] = 1.0
+
+        return C
